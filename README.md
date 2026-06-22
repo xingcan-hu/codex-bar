@@ -1,24 +1,27 @@
 # Codex Bar
 
-Codex Bar is a small macOS menu bar app that shows the remaining Codex usage for the current account in `~/.codex/auth.json`.
+Codex Bar is a small macOS menu bar app that shows the remaining Codex usage for the active account and can switch between accounts managed by [`codex-auth`](https://github.com/Loongphy/codex-auth).
 
-It intentionally supports only one account: the current Codex account. It does not switch accounts, refresh OAuth tokens, edit `auth.json`, or manage Codex sessions.
+It reads the same multi-account registry used by `codex-auth` at `~/.codex/accounts/registry.json`, and switches accounts by copying the selected account snapshot to `~/.codex/auth.json`.
 
 ## What It Shows
 
-- The menu bar title shows the lowest remaining percentage across the primary and secondary usage windows.
-- The dropdown menu shows primary and secondary remaining usage, window length, reset time, last refresh time, and any request error.
-- `Refresh Now` fetches the latest usage immediately.
+- The menu bar title shows the active account's 5H and weekly remaining usage.
+- The dropdown menu shows the active account, plan, 5H reset, weekly reset, and any request error.
+- `Accounts` opens a submenu of `codex-auth` accounts. Opening it refreshes all accounts concurrently, then each row shows plan, 5H remaining, weekly remaining, relative last refresh time, and identity.
+- Clicking an account row switches immediately.
+- `Refresh Now` fetches the latest usage for the active account.
 - `Refresh Interval...` lets you set the polling interval in seconds.
-- `Reload auth.json on refresh` controls whether every refresh rereads `~/.codex/auth.json`.
+- `Request Timeout...` sets the maximum duration for each usage request.
+- `Reload accounts on refresh` controls whether refreshes reread the registry and active auth file.
 
-By default, Codex Bar reads `~/.codex/auth.json` once at startup and reuses the in-memory token for later refreshes.
+By default, Codex Bar reads account files once at startup and reuses the in-memory active token for regular active-account refreshes.
 
 ## Usage Source
 
-Codex Bar follows the same basic API-backed usage flow used by `loongphy/codex-auth`:
+Codex Bar follows the same basic API-backed usage flow used by `codex-auth`:
 
-1. Read `tokens.access_token` and `tokens.account_id` from `~/.codex/auth.json`.
+1. Read `tokens.access_token` and `tokens.account_id` from the active account auth file.
 2. Request:
 
    ```http
@@ -29,6 +32,7 @@ Codex Bar follows the same basic API-backed usage flow used by `loongphy/codex-a
    ```
 
 3. Parse `rate_limit.primary_window` and `rate_limit.secondary_window`.
+4. Persist refreshed usage into `~/.codex/accounts/registry.json` for the matching account.
 
 This sends your ChatGPT access token to OpenAI's ChatGPT backend endpoint. The app stores no copy of the token outside process memory unless you enable macOS crash/reporting tools yourself.
 
@@ -55,6 +59,12 @@ Install to `/Applications`:
 ./scripts/install.sh /Applications
 ```
 
+Overwrite the installed app and restart it:
+
+```bash
+./scripts/overwrite_install.sh
+```
+
 Launch it:
 
 ```bash
@@ -73,13 +83,15 @@ Settings are stored with `UserDefaults` under the app bundle identifier `com.loc
 
 - Default refresh interval: 300 seconds
 - Minimum refresh interval: 30 seconds
-- Reload `auth.json` on refresh: off by default
+- Default request timeout: 3 seconds
+- Minimum request timeout: 1 second
+- Reload accounts on refresh: off by default
 
 ## Limitations
 
 - ChatGPT/Codex auth only; API key auth is not supported.
-- One account only.
-- No token refresh. If the token expires, sign in through Codex again, then restart Codex Bar or enable `Reload auth.json on refresh`.
+- Account login, import, remove, and alias management are intentionally left to `codex-auth`.
+- No token refresh. If a token expires, sign in or import through `codex-auth` again, then restart Codex Bar or enable `Reload accounts on refresh`.
 - The usage endpoint is not a public stable API, so response fields may change.
 
 ## License

@@ -42,6 +42,42 @@ static RateLimitWindow *ParseWindow(id value) {
                                                resetAt:resetAt];
 }
 
+static RateLimitWindow *ParseRegistryWindow(id value) {
+    if (![value isKindOfClass:NSDictionary.class]) {
+        return nil;
+    }
+
+    NSDictionary *object = (NSDictionary *)value;
+    NSNumber *used = NumberFromValue(object[@"used_percent"]);
+    if (!used) {
+        return nil;
+    }
+
+    NSNumber *windowMinutes = NumberFromValue(object[@"window_minutes"]);
+    NSNumber *limitSeconds = windowMinutes ? @(windowMinutes.doubleValue * 60.0) : nil;
+    NSNumber *resetTimestamp = NumberFromValue(object[@"resets_at"]);
+    NSDate *resetAt = resetTimestamp ? [NSDate dateWithTimeIntervalSince1970:resetTimestamp.doubleValue] : nil;
+    return [[RateLimitWindow alloc] initWithUsedPercent:used.doubleValue
+                                    limitWindowSeconds:limitSeconds
+                                               resetAt:resetAt];
+}
+
+static id JSONObjectOrNull(id value) {
+    return value ?: NSNull.null;
+}
+
+static NSDictionary *RegistryWindowObject(RateLimitWindow *window) {
+    if (!window) {
+        return nil;
+    }
+
+    NSMutableDictionary *object = [NSMutableDictionary dictionary];
+    object[@"used_percent"] = @(window.usedPercent);
+    object[@"window_minutes"] = JSONObjectOrNull(window.windowMinutes);
+    object[@"resets_at"] = window.resetAt ? @((long long)floor(window.resetAt.timeIntervalSince1970)) : NSNull.null;
+    return object;
+}
+
 @implementation RateLimitWindow
 
 - (instancetype)initWithUsedPercent:(double)usedPercent
@@ -158,6 +194,52 @@ static RateLimitWindow *ParseWindow(id value) {
                                 secondary:secondary
                                   credits:credits
                                 fetchedAt:fetchedAt];
+}
+
++ (instancetype)snapshotFromRegistryObject:(id)object lastUsageAt:(NSDate *)lastUsageAt {
+    if (![object isKindOfClass:NSDictionary.class]) {
+        return nil;
+    }
+
+    NSDictionary *root = (NSDictionary *)object;
+    RateLimitWindow *primary = ParseRegistryWindow(root[@"primary"]);
+    RateLimitWindow *secondary = ParseRegistryWindow(root[@"secondary"]);
+    CreditsSnapshot *credits = nil;
+    NSDictionary *creditsObject = [root[@"credits"] isKindOfClass:NSDictionary.class] ? root[@"credits"] : nil;
+    if (creditsObject) {
+        BOOL hasCredits = [creditsObject[@"has_credits"] respondsToSelector:@selector(boolValue)] ? [creditsObject[@"has_credits"] boolValue] : NO;
+        BOOL unlimited = [creditsObject[@"unlimited"] respondsToSelector:@selector(boolValue)] ? [creditsObject[@"unlimited"] boolValue] : NO;
+        credits = [[CreditsSnapshot alloc] initWithHasCredits:hasCredits
+                                                    unlimited:unlimited
+                                                      balance:StringFromValue(creditsObject[@"balance"])];
+    }
+
+    if (!primary && !secondary && !credits && !StringFromValue(root[@"plan_type"])) {
+        return nil;
+    }
+
+    return [[self alloc] initWithPlanType:StringFromValue(root[@"plan_type"])
+                                  primary:primary
+                                secondary:secondary
+                                  credits:credits
+                                fetchedAt:lastUsageAt ?: NSDate.date];
+}
+
+- (NSDictionary *)registryObjectWithPlanFallback:(NSString *)planFallback {
+    NSMutableDictionary *object = [NSMutableDictionary dictionary];
+    object[@"primary"] = JSONObjectOrNull(RegistryWindowObject(self.primary));
+    object[@"secondary"] = JSONObjectOrNull(RegistryWindowObject(self.secondary));
+    if (self.credits) {
+        object[@"credits"] = @{
+            @"has_credits": @(self.credits.hasCredits),
+            @"unlimited": @(self.credits.unlimited),
+            @"balance": JSONObjectOrNull(self.credits.balance)
+        };
+    } else {
+        object[@"credits"] = NSNull.null;
+    }
+    object[@"plan_type"] = JSONObjectOrNull(self.planType ?: planFallback);
+    return object;
 }
 
 @end
