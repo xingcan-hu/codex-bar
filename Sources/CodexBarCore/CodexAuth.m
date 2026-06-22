@@ -29,7 +29,7 @@ static NSData *Base64URLDecode(NSString *value) {
     return [[NSData alloc] initWithBase64EncodedString:base64 options:0];
 }
 
-static NSString *EmailFromIDToken(NSString *idToken) {
+static NSDictionary *PayloadFromIDToken(NSString *idToken) {
     NSArray<NSString *> *parts = [idToken componentsSeparatedByString:@"."];
     if (parts.count < 2) {
         return nil;
@@ -45,8 +45,18 @@ static NSString *EmailFromIDToken(NSString *idToken) {
         return nil;
     }
 
-    NSString *email = TrimmedNonEmpty(((NSDictionary *)payload)[@"email"]);
-    return email;
+    return (NSDictionary *)payload;
+}
+
+static NSString *AuthPayloadString(NSDictionary *payload, NSString *key) {
+    NSDictionary *auth = [payload[@"https://api.openai.com/auth"] isKindOfClass:NSDictionary.class]
+        ? payload[@"https://api.openai.com/auth"]
+        : nil;
+    NSString *value = TrimmedNonEmpty(auth[key]);
+    if (!value) {
+        value = TrimmedNonEmpty(payload[key]);
+    }
+    return value;
 }
 
 @implementation CodexAuth
@@ -54,6 +64,9 @@ static NSString *EmailFromIDToken(NSString *idToken) {
 - (instancetype)initWithAccessToken:(NSString *)accessToken
                           accountID:(NSString *)accountID
                        accountEmail:(NSString *)accountEmail
+                   chatGPTAccountID:(NSString *)chatGPTAccountID
+                       chatGPTUserID:(NSString *)chatGPTUserID
+                            planType:(NSString *)planType
                            authMode:(NSString *)authMode
                          sourcePath:(NSString *)sourcePath {
     self = [super init];
@@ -61,6 +74,13 @@ static NSString *EmailFromIDToken(NSString *idToken) {
         _accessToken = [accessToken copy];
         _accountID = [accountID copy];
         _accountEmail = [accountEmail copy];
+        _chatGPTAccountID = [chatGPTAccountID copy];
+        _chatGPTUserID = [chatGPTUserID copy];
+        _planType = [planType copy];
+        NSString *accountKeyAccountID = chatGPTAccountID.length > 0 ? chatGPTAccountID : accountID;
+        if (chatGPTUserID.length > 0 && accountKeyAccountID.length > 0) {
+            _accountKey = [[NSString stringWithFormat:@"%@::%@", chatGPTUserID, accountKeyAccountID] copy];
+        }
         _authMode = [authMode copy];
         _sourcePath = [sourcePath copy];
     }
@@ -129,10 +149,20 @@ static NSString *EmailFromIDToken(NSString *idToken) {
         return nil;
     }
 
-    NSString *accountEmail = EmailFromIDToken(TrimmedNonEmpty(tokens[@"id_token"]));
+    NSDictionary *payload = PayloadFromIDToken(TrimmedNonEmpty(tokens[@"id_token"]));
+    NSString *accountEmail = TrimmedNonEmpty(payload[@"email"]);
+    NSString *chatGPTUserID = AuthPayloadString(payload, @"chatgpt_user_id");
+    if (!chatGPTUserID) {
+        chatGPTUserID = AuthPayloadString(payload, @"user_id");
+    }
+    NSString *chatGPTAccountID = AuthPayloadString(payload, @"chatgpt_account_id") ?: accountID;
+    NSString *planType = AuthPayloadString(payload, @"chatgpt_plan_type");
     return [[self alloc] initWithAccessToken:accessToken
                                    accountID:accountID
                                 accountEmail:accountEmail
+                            chatGPTAccountID:chatGPTAccountID
+                                chatGPTUserID:chatGPTUserID
+                                     planType:planType
                                     authMode:authMode
                                   sourcePath:sourcePath];
 }

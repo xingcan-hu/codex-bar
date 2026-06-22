@@ -48,6 +48,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (nullable NSNumber *)remainingPercent;
 + (nullable instancetype)parseData:(NSData *)data fetchedAt:(NSDate *)fetchedAt error:(NSError **)error;
++ (nullable instancetype)snapshotFromRegistryObject:(id)object lastUsageAt:(nullable NSDate *)lastUsageAt;
+- (NSDictionary *)registryObjectWithPlanFallback:(nullable NSString *)planFallback;
 
 @end
 
