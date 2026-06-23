@@ -10,6 +10,9 @@ static NSString *const UsageHTTPStatusUserInfoKey = @"CodexBarUsageHTTPStatus";
 static NSString *const UsageErrorCodeUserInfoKey = @"CodexBarUsageErrorCode";
 static const NSTimeInterval DefaultUsageRequestTimeoutSeconds = 3.0;
 static const NSInteger UsageRequestsPerHostLimit = 64;
+// The 10pt top glyph exceeds the fixed 8.5pt line box, so it needs a visual offset.
+static const CGFloat StatusTitleBaselineOffset = -6.0;
+static const CGFloat AccountMenuColumnSpacing = 18.0;
 
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @end
@@ -395,7 +398,7 @@ static const NSInteger UsageRequestsPerHostLimit = 64;
     NSDictionary<NSAttributedStringKey, id> *baseAttributes = @{
         NSForegroundColorAttributeName: NSColor.labelColor,
         NSParagraphStyleAttributeName: paragraph,
-        NSBaselineOffsetAttributeName: @(-3.0)
+        NSBaselineOffsetAttributeName: @(StatusTitleBaselineOffset)
     };
 
     NSString *title = [NSString stringWithFormat:@"%@\n%@", topText, bottomText];
@@ -481,6 +484,20 @@ static const NSInteger UsageRequestsPerHostLimit = 64;
             return leftRank < rightRank ? NSOrderedAscending : NSOrderedDescending;
         }
 
+        if (leftRank == 0) {
+            double leftWeekly = left.lastUsage.secondary ? left.lastUsage.secondary.remainingPercent : -1.0;
+            double rightWeekly = right.lastUsage.secondary ? right.lastUsage.secondary.remainingPercent : -1.0;
+            if (leftWeekly != rightWeekly) {
+                return leftWeekly > rightWeekly ? NSOrderedAscending : NSOrderedDescending;
+            }
+
+            double leftHourly = left.lastUsage.primary ? left.lastUsage.primary.remainingPercent : -1.0;
+            double rightHourly = right.lastUsage.primary ? right.lastUsage.primary.remainingPercent : -1.0;
+            if (leftHourly != rightHourly) {
+                return leftHourly > rightHourly ? NSOrderedAscending : NSOrderedDescending;
+            }
+        }
+
         NSUInteger leftIndex = [self.registry.accounts indexOfObjectIdenticalTo:left];
         NSUInteger rightIndex = [self.registry.accounts indexOfObjectIdenticalTo:right];
         if (leftIndex == rightIndex) {
@@ -489,10 +506,17 @@ static const NSInteger UsageRequestsPerHostLimit = 64;
         return leftIndex < rightIndex ? NSOrderedAscending : NSOrderedDescending;
     }];
 
+    NSArray<NSNumber *> *tabStops = [self accountRowTabStopsForRecords:records];
     for (CodexAccountRecord *record in records) {
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:[self accountRowTitle:record]
+        NSError *error = self.accountRefreshErrors[record.accountKey];
+        NSArray<NSString *> *columns = error ? nil : [self accountRowColumns:record];
+        NSString *title = error ? [self accountErrorRowTitle:record error:error] : [columns componentsJoinedByString:@"\t"];
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
                                                       action:@selector(switchAccount:)
                                                keyEquivalent:@""];
+        if (columns) {
+            item.attributedTitle = [self accountRowAttributedTitleForColumns:columns tabStops:tabStops];
+        }
         item.target = self;
         item.representedObject = record.accountKey;
         item.state = [record.accountKey isEqualToString:self.registry.activeAccountKey] ? NSControlStateValueOn : NSControlStateValueOff;
@@ -501,10 +525,7 @@ static const NSInteger UsageRequestsPerHostLimit = 64;
 }
 
 - (NSInteger)accountSortRank:(CodexAccountRecord *)record {
-    if ([record.accountKey isEqualToString:self.registry.activeAccountKey]) {
-        return 0;
-    }
-    return self.accountRefreshErrors[record.accountKey] ? 2 : 1;
+    return self.accountRefreshErrors[record.accountKey] ? 1 : 0;
 }
 
 - (void)menuWillOpen:(NSMenu *)menu {
@@ -556,28 +577,72 @@ static const NSInteger UsageRequestsPerHostLimit = 64;
     [self updateStatusItem];
 }
 
-- (NSString *)accountRowTitle:(CodexAccountRecord *)record {
-    NSError *error = self.accountRefreshErrors[record.accountKey];
+- (NSArray<NSString *> *)accountRowColumns:(CodexAccountRecord *)record {
     NSString *primary = [self accountWindowText:record.lastUsage.primary showsDate:NO];
     NSString *secondary = [self accountWindowText:record.lastUsage.secondary showsDate:YES];
     NSString *last = CodexRelativeTimeString(record.lastUsageAt, NSDate.date);
     if ([self.refreshingAccountKeys containsObject:record.accountKey]) {
         last = @"Refreshing...";
     }
-    if (error) {
-        return [NSString stringWithFormat:@"%@ — %@ — %@ — %@",
-                record.displayPlan,
-                [self accountRefreshErrorText:error],
-                last,
-                record.identityDisplayName];
-    }
 
-    return [NSString stringWithFormat:@"%@ — %@ H / %@ W — %@ — %@",
+    return @[
+        record.displayPlan,
+        [primary stringByAppendingString:@" H"],
+        [secondary stringByAppendingString:@" W"],
+        last,
+        record.identityDisplayName
+    ];
+}
+
+- (NSString *)accountErrorRowTitle:(CodexAccountRecord *)record error:(NSError *)error {
+    NSString *last = CodexRelativeTimeString(record.lastUsageAt, NSDate.date);
+    return [NSString stringWithFormat:@"%@ — %@ — %@ — %@",
             record.displayPlan,
-            primary,
-            secondary,
+            [self accountRefreshErrorText:error],
             last,
             record.identityDisplayName];
+}
+
+- (NSArray<NSNumber *> *)accountRowTabStopsForRecords:(NSArray<CodexAccountRecord *> *)records {
+    NSFont *font = [NSFont menuFontOfSize:0.0];
+    CGFloat widths[] = {0.0, 0.0, 0.0, 0.0};
+    NSDictionary<NSAttributedStringKey, id> *attributes = @{NSFontAttributeName: font};
+
+    for (CodexAccountRecord *record in records) {
+        if (self.accountRefreshErrors[record.accountKey]) {
+            continue;
+        }
+        NSArray<NSString *> *columns = [self accountRowColumns:record];
+        for (NSUInteger index = 0; index < 4; index++) {
+            widths[index] = MAX(widths[index], ceil([columns[index] sizeWithAttributes:attributes].width));
+        }
+    }
+
+    NSMutableArray<NSNumber *> *tabStops = [NSMutableArray arrayWithCapacity:4];
+    CGFloat location = 0.0;
+    for (NSUInteger index = 0; index < 4; index++) {
+        location += widths[index] + AccountMenuColumnSpacing;
+        [tabStops addObject:@(location)];
+    }
+    return tabStops;
+}
+
+- (NSAttributedString *)accountRowAttributedTitleForColumns:(NSArray<NSString *> *)columns tabStops:(NSArray<NSNumber *> *)tabStops {
+    NSMutableParagraphStyle *paragraph = [[NSMutableParagraphStyle alloc] init];
+    NSMutableArray<NSTextTab *> *textTabs = [NSMutableArray arrayWithCapacity:tabStops.count];
+    for (NSNumber *location in tabStops) {
+        [textTabs addObject:[[NSTextTab alloc] initWithTextAlignment:NSTextAlignmentLeft
+                                                           location:location.doubleValue
+                                                            options:@{}]];
+    }
+    paragraph.tabStops = textTabs;
+
+    return [[NSAttributedString alloc] initWithString:[columns componentsJoinedByString:@"\t"]
+                                           attributes:@{
+                                               NSFontAttributeName: [NSFont menuFontOfSize:0.0],
+                                               NSForegroundColorAttributeName: NSColor.labelColor,
+                                               NSParagraphStyleAttributeName: paragraph
+                                           }];
 }
 
 - (NSString *)accountRefreshErrorText:(NSError *)error {
