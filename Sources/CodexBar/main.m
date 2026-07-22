@@ -27,7 +27,6 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
 @property (nonatomic, strong) UsageSnapshot *snapshot;
 @property (nonatomic, strong) NSError *lastError;
 @property (nonatomic) BOOL refreshing;
-@property (nonatomic, strong) NSMenu *accountsMenu;
 @property (nonatomic, strong) NSMutableSet<NSString *> *refreshingAccountKeys;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSError *> *accountRefreshErrors;
 @property (nonatomic, strong) NSNumberFormatter *percentFormatter;
@@ -158,15 +157,22 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
     NSError *registryError = nil;
     CodexRegistry *loadedRegistry = [CodexRegistry loadDefaultWithError:&registryError];
     if (loadedRegistry) {
+        NSError *authError = nil;
+        CodexAuth *loadedAuth = [CodexAuth loadFromPath:loadedRegistry.activeAuthPath error:&authError];
+        if (loadedAuth.accountKey.length > 0) {
+            NSError *syncError = nil;
+            if (![loadedRegistry synchronizeWithActiveAuth:loadedAuth error:&syncError]) {
+                if (error) {
+                    *error = syncError;
+                }
+                return NO;
+            }
+        }
+
         self.registry = loadedRegistry;
         CodexAccountRecord *active = loadedRegistry.activeAccount;
         self.snapshot = active.lastUsage;
 
-        NSError *authError = nil;
-        CodexAuth *loadedAuth = [CodexAuth loadFromPath:loadedRegistry.activeAuthPath error:&authError];
-        if (loadedAuth && active && loadedAuth.accountKey.length > 0 && ![loadedAuth.accountKey isEqualToString:active.accountKey]) {
-            loadedAuth = nil;
-        }
         if (!loadedAuth && active) {
             authError = nil;
             loadedAuth = [loadedRegistry authForAccountKey:active.accountKey error:&authError];
@@ -310,7 +316,7 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
     if (rebuildMainMenu) {
         [self rebuildMenu];
     } else {
-        [self rebuildAccountsMenu];
+        [self rebuildMenu];
     }
 }
 
@@ -327,7 +333,7 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
     if (rebuildMainMenu) {
         [self rebuildMenu];
     } else {
-        [self rebuildAccountsMenu];
+        [self rebuildMenu];
     }
 }
 
@@ -362,8 +368,8 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
 }
 
 - (void)updateStatusItem {
-    NSString *hourText = [self statusWindowText:self.snapshot.primary suffix:@"H"];
-    NSString *weekText = [self statusWindowText:self.snapshot.secondary suffix:@"W"];
+    NSString *hourText = [self statusWindowText:self.snapshot.fiveHourWindow suffix:@"H"];
+    NSString *weekText = [self statusWindowText:self.snapshot.weeklyWindow suffix:@"W"];
     self.statusItem.button.image = nil;
     self.statusItem.button.title = @"";
     self.statusItem.button.attributedTitle = [self statusTitleWithTopText:hourText bottomText:weekText];
@@ -425,14 +431,16 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
 }
 
 - (void)rebuildMenu {
-    NSMenu *menu = [[NSMenu alloc] init];
+    NSMenu *menu = self.statusItem.menu ?: [[NSMenu alloc] init];
+    [menu removeAllItems];
     menu.autoenablesItems = NO;
+    menu.delegate = self;
 
     [self addDisabledItemToMenu:menu title:[NSString stringWithFormat:@"Account: %@", [self accountMenuValue]]];
     [self addDisabledItemToMenu:menu title:[NSString stringWithFormat:@"Plan: %@", [self planMenuValue]]];
     [menu addItem:NSMenuItem.separatorItem];
-    [self addDisabledItemToMenu:menu title:[self quotaMenuTitleWithName:@"5H" window:self.snapshot.primary showsDate:NO]];
-    [self addDisabledItemToMenu:menu title:[self quotaMenuTitleWithName:@"Weekly" window:self.snapshot.secondary showsDate:YES]];
+    [self addDisabledItemToMenu:menu title:[self quotaMenuTitleWithName:@"5H" window:self.snapshot.fiveHourWindow showsDate:NO]];
+    [self addDisabledItemToMenu:menu title:[self quotaMenuTitleWithName:@"Weekly" window:self.snapshot.weeklyWindow showsDate:YES]];
 
     if (self.lastError) {
         [menu addItem:NSMenuItem.separatorItem];
@@ -444,12 +452,7 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
     NSMenuItem *refreshItem = [self addActionItemToMenu:menu title:refreshTitle action:@selector(refreshNow:)];
     refreshItem.enabled = !self.refreshing;
 
-    NSMenuItem *accountsItem = [[NSMenuItem alloc] initWithTitle:@"Accounts" action:nil keyEquivalent:@""];
-    self.accountsMenu = [[NSMenu alloc] initWithTitle:@"Accounts"];
-    self.accountsMenu.delegate = self;
-    [self rebuildAccountsMenu];
-    accountsItem.submenu = self.accountsMenu;
-    [menu addItem:accountsItem];
+    [self addAccountsToMenu:menu];
 
     [self addActionItemToMenu:menu
                         title:[NSString stringWithFormat:@"Refresh Interval: %@...", [self formatInterval:self.refreshIntervalSeconds]]
@@ -470,10 +473,9 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
     self.statusItem.menu = menu;
 }
 
-- (void)rebuildAccountsMenu {
-    [self.accountsMenu removeAllItems];
+- (void)addAccountsToMenu:(NSMenu *)menu {
     if (!self.registry || self.registry.accounts.count == 0) {
-        [self addDisabledItemToMenu:self.accountsMenu title:@"No codex-auth accounts"];
+        [self addDisabledItemToMenu:menu title:@"No codex-auth accounts"];
         return;
     }
 
@@ -485,14 +487,14 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
         }
 
         if (leftRank == 0) {
-            double leftWeekly = left.lastUsage.secondary ? left.lastUsage.secondary.remainingPercent : -1.0;
-            double rightWeekly = right.lastUsage.secondary ? right.lastUsage.secondary.remainingPercent : -1.0;
+            double leftWeekly = left.lastUsage.weeklyWindow ? left.lastUsage.weeklyWindow.remainingPercent : -1.0;
+            double rightWeekly = right.lastUsage.weeklyWindow ? right.lastUsage.weeklyWindow.remainingPercent : -1.0;
             if (leftWeekly != rightWeekly) {
                 return leftWeekly > rightWeekly ? NSOrderedAscending : NSOrderedDescending;
             }
 
-            double leftHourly = left.lastUsage.primary ? left.lastUsage.primary.remainingPercent : -1.0;
-            double rightHourly = right.lastUsage.primary ? right.lastUsage.primary.remainingPercent : -1.0;
+            double leftHourly = left.lastUsage.fiveHourWindow ? left.lastUsage.fiveHourWindow.remainingPercent : -1.0;
+            double rightHourly = right.lastUsage.fiveHourWindow ? right.lastUsage.fiveHourWindow.remainingPercent : -1.0;
             if (leftHourly != rightHourly) {
                 return leftHourly > rightHourly ? NSOrderedAscending : NSOrderedDescending;
             }
@@ -507,20 +509,20 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
     }];
 
     NSArray<NSNumber *> *tabStops = [self accountRowTabStopsForRecords:records];
+    NSArray<NSString *> *headings = @[@"PLAN", @"5H", @"WEEKLY", @"UPDATED", @"ACCOUNT"];
+    [self addDisabledAttributedItemToMenu:menu title:[self accountRowAttributedTitleForColumns:headings tabStops:tabStops]];
     for (CodexAccountRecord *record in records) {
         NSError *error = self.accountRefreshErrors[record.accountKey];
-        NSArray<NSString *> *columns = error ? nil : [self accountRowColumns:record];
-        NSString *title = error ? [self accountErrorRowTitle:record error:error] : [columns componentsJoinedByString:@"\t"];
+        NSArray<NSString *> *columns = [self accountRowColumns:record error:error];
+        NSString *title = [columns componentsJoinedByString:@"\t"];
         NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
                                                       action:@selector(switchAccount:)
                                                keyEquivalent:@""];
-        if (columns) {
-            item.attributedTitle = [self accountRowAttributedTitleForColumns:columns tabStops:tabStops];
-        }
+        item.attributedTitle = [self accountRowAttributedTitleForColumns:columns tabStops:tabStops];
         item.target = self;
         item.representedObject = record.accountKey;
         item.state = [record.accountKey isEqualToString:self.registry.activeAccountKey] ? NSControlStateValueOn : NSControlStateValueOff;
-        [self.accountsMenu addItem:item];
+        [menu addItem:item];
     }
 }
 
@@ -529,7 +531,7 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
 }
 
 - (void)menuWillOpen:(NSMenu *)menu {
-    if (menu == self.accountsMenu) {
+    if (menu == self.statusItem.menu) {
         [self refreshAllAccountsFromMenu];
     }
 }
@@ -546,7 +548,7 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
     }
 
     if (!self.registry || self.registry.accounts.count == 0) {
-        [self rebuildAccountsMenu];
+        [self rebuildMenu];
         return;
     }
 
@@ -554,7 +556,7 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
     for (CodexAccountRecord *record in self.registry.accounts) {
         [self.refreshingAccountKeys addObject:record.accountKey];
     }
-    [self rebuildAccountsMenu];
+    [self rebuildMenu];
 
     for (CodexAccountRecord *record in self.registry.accounts) {
         NSError *authError = nil;
@@ -563,7 +565,7 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
             [self.refreshingAccountKeys removeObject:record.accountKey];
             [self.accountRefreshErrors setObject:authError ?: CodexBarError(CodexBarErrorMissingAccountSnapshot, @"Missing account snapshot")
                                           forKey:record.accountKey];
-            [self rebuildAccountsMenu];
+            [self rebuildMenu];
             continue;
         }
 
@@ -577,9 +579,9 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
     [self updateStatusItem];
 }
 
-- (NSArray<NSString *> *)accountRowColumns:(CodexAccountRecord *)record {
-    NSString *primary = [self accountWindowText:record.lastUsage.primary showsDate:NO];
-    NSString *secondary = [self accountWindowText:record.lastUsage.secondary showsDate:YES];
+- (NSArray<NSString *> *)accountRowColumns:(CodexAccountRecord *)record error:(NSError *)error {
+    NSString *primary = error ? [self accountRefreshErrorText:error] : [self accountWindowText:record.lastUsage.fiveHourWindow showsDate:NO];
+    NSString *secondary = error ? [self accountRefreshErrorText:error] : [self accountWindowText:record.lastUsage.weeklyWindow showsDate:YES];
     NSString *last = CodexRelativeTimeString(record.lastUsageAt, NSDate.date);
     if ([self.refreshingAccountKeys containsObject:record.accountKey]) {
         last = @"Refreshing...";
@@ -587,32 +589,25 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
 
     return @[
         record.displayPlan,
-        [primary stringByAppendingString:@" H"],
-        [secondary stringByAppendingString:@" W"],
+        primary,
+        secondary,
         last,
         record.identityDisplayName
     ];
 }
 
-- (NSString *)accountErrorRowTitle:(CodexAccountRecord *)record error:(NSError *)error {
-    NSString *last = CodexRelativeTimeString(record.lastUsageAt, NSDate.date);
-    return [NSString stringWithFormat:@"%@ — %@ — %@ — %@",
-            record.displayPlan,
-            [self accountRefreshErrorText:error],
-            last,
-            record.identityDisplayName];
-}
-
 - (NSArray<NSNumber *> *)accountRowTabStopsForRecords:(NSArray<CodexAccountRecord *> *)records {
     NSFont *font = [NSFont menuFontOfSize:0.0];
+    NSArray<NSString *> *headings = @[@"PLAN", @"5H", @"WEEKLY", @"UPDATED"];
     CGFloat widths[] = {0.0, 0.0, 0.0, 0.0};
     NSDictionary<NSAttributedStringKey, id> *attributes = @{NSFontAttributeName: font};
 
+    for (NSUInteger index = 0; index < 4; index++) {
+        widths[index] = ceil([headings[index] sizeWithAttributes:attributes].width);
+    }
+
     for (CodexAccountRecord *record in records) {
-        if (self.accountRefreshErrors[record.accountKey]) {
-            continue;
-        }
-        NSArray<NSString *> *columns = [self accountRowColumns:record];
+        NSArray<NSString *> *columns = [self accountRowColumns:record error:self.accountRefreshErrors[record.accountKey]];
         for (NSUInteger index = 0; index < 4; index++) {
             widths[index] = MAX(widths[index], ceil([columns[index] sizeWithAttributes:attributes].width));
         }
@@ -714,6 +709,13 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
 
 - (void)addDisabledItemToMenu:(NSMenu *)menu title:(NSString *)title {
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+    item.enabled = NO;
+    [menu addItem:item];
+}
+
+- (void)addDisabledAttributedItemToMenu:(NSMenu *)menu title:(NSAttributedString *)title {
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title.string action:nil keyEquivalent:@""];
+    item.attributedTitle = title;
     item.enabled = NO;
     [menu addItem:item];
 }

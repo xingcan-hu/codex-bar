@@ -75,6 +75,7 @@ FOUNDATION_EXPORT NSString *CodexRelativeTimeString(NSDate *_Nullable date, NSDa
 - (nullable CodexAccountRecord *)accountForKey:(NSString *)accountKey;
 - (NSString *)snapshotPathForAccountKey:(NSString *)accountKey;
 - (nullable CodexAuth *)authForAccountKey:(NSString *)accountKey error:(NSError **)error;
+- (BOOL)synchronizeWithActiveAuth:(CodexAuth *)auth error:(NSError **)error;
 - (BOOL)updateUsage:(UsageSnapshot *)usage forAccountKey:(NSString *)accountKey;
 - (BOOL)switchToAccountKey:(NSString *)accountKey error:(NSError **)error;
 - (BOOL)saveWithError:(NSError **)error;

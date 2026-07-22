@@ -156,6 +156,17 @@ static NSDictionary *RegistryWindowObject(RateLimitWindow *window) {
     return @(minimum);
 }
 
+- (RateLimitWindow *)fiveHourWindow {
+    // codex-auth mirrors a lone window into both quota columns. Recent Plus
+    // responses can contain only the seven-day primary window, so keep the
+    // same fallback while preserving the normal primary/secondary mapping.
+    return self.primary ?: self.secondary;
+}
+
+- (RateLimitWindow *)weeklyWindow {
+    return self.secondary ?: self.primary;
+}
+
 + (instancetype)parseData:(NSData *)data fetchedAt:(NSDate *)fetchedAt error:(NSError **)error {
     NSError *jsonError = nil;
     id object = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];

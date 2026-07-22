@@ -32,6 +32,7 @@ clang \
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$RELEASE_DIR/$EXECUTABLE_NAME" "$MACOS_DIR/$EXECUTABLE_NAME"
 cp "Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
+cp "Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 chmod +x "$MACOS_DIR/$EXECUTABLE_NAME"
 
 echo "$APP_DIR"

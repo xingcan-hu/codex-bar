@@ -47,6 +47,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (instancetype)init NS_UNAVAILABLE;
 
 - (nullable NSNumber *)remainingPercent;
+- (nullable RateLimitWindow *)fiveHourWindow;
+- (nullable RateLimitWindow *)weeklyWindow;
 + (nullable instancetype)parseData:(NSData *)data fetchedAt:(NSDate *)fetchedAt error:(NSError **)error;
 + (nullable instancetype)snapshotFromRegistryObject:(id)object lastUsageAt:(nullable NSDate *)lastUsageAt;
 - (NSDictionary *)registryObjectWithPlanFallback:(nullable NSString *)planFallback;
