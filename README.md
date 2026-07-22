@@ -2,13 +2,13 @@
 
 Codex Bar is a small macOS menu bar app that shows the remaining Codex usage for the active account and can switch between accounts managed by [`codex-auth`](https://github.com/Loongphy/codex-auth).
 
-It reads the same multi-account registry used by `codex-auth` at `~/.codex/accounts/registry.json`, and switches accounts by copying the selected account snapshot to `~/.codex/auth.json`.
+It reads the same multi-account registry used by `codex-auth` at `~/.codex/accounts/registry.json`, reconciles the current `~/.codex/auth.json` account when it is missing or newer, and switches accounts by copying the selected account snapshot to `~/.codex/auth.json`.
 
 ## What It Shows
 
 - The menu bar title shows the active account's 5H and weekly remaining usage.
 - The dropdown menu shows the active account, plan, 5H reset, weekly reset, and any request error.
-- `Accounts` opens a submenu of `codex-auth` accounts. Opening it refreshes all accounts concurrently, then each row shows plan, 5H remaining, weekly remaining, relative last refresh time, and identity.
+- The dropdown menu shows `codex-auth` accounts directly. Opening it refreshes all accounts concurrently, then each row shows plan, 5H remaining, weekly remaining, relative last refresh time, and identity.
 - Clicking an account row switches immediately.
 - `Refresh Now` fetches the latest usage for the active account.
 - `Refresh Interval...` lets you set the polling interval in seconds.
@@ -32,6 +32,7 @@ Codex Bar follows the same basic API-backed usage flow used by `codex-auth`:
    ```
 
 3. Parse `rate_limit.primary_window` and `rate_limit.secondary_window`.
+   When the endpoint returns only one window, mirror it into both quota columns to match `codex-auth list`.
 4. Persist refreshed usage into `~/.codex/accounts/registry.json` for the matching account.
 
 This sends your ChatGPT access token to OpenAI's ChatGPT backend endpoint. The app stores no copy of the token outside process memory unless you enable macOS crash/reporting tools yourself.
