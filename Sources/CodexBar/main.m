@@ -13,6 +13,17 @@ static const NSInteger UsageRequestsPerHostLimit = 64;
 // The 10pt top glyph exceeds the fixed 8.5pt line box, so it needs a visual offset.
 static const CGFloat StatusTitleBaselineOffset = -6.0;
 static const CGFloat AccountMenuColumnSpacing = 18.0;
+// Size the account table for its widest normal states up front. Measuring the
+// live values makes the columns jump whenever "Refreshing..." or an error is
+// replaced by quota data.
+static NSArray<NSString *> *AccountMenuColumnWidthSamples(void) {
+    return @[
+        @"Enterprise",
+        @"401 token_invalidated",
+        @"100% (23:59 on 30 Sep)",
+        @"Refreshing..."
+    ];
+}
 
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @end
@@ -597,20 +608,17 @@ static const CGFloat AccountMenuColumnSpacing = 18.0;
 }
 
 - (NSArray<NSNumber *> *)accountRowTabStopsForRecords:(NSArray<CodexAccountRecord *> *)records {
+    (void)records;
     NSFont *font = [NSFont menuFontOfSize:0.0];
     NSArray<NSString *> *headings = @[@"PLAN", @"5H", @"WEEKLY", @"UPDATED"];
+    NSArray<NSString *> *widthSamples = AccountMenuColumnWidthSamples();
     CGFloat widths[] = {0.0, 0.0, 0.0, 0.0};
     NSDictionary<NSAttributedStringKey, id> *attributes = @{NSFontAttributeName: font};
 
     for (NSUInteger index = 0; index < 4; index++) {
-        widths[index] = ceil([headings[index] sizeWithAttributes:attributes].width);
-    }
-
-    for (CodexAccountRecord *record in records) {
-        NSArray<NSString *> *columns = [self accountRowColumns:record error:self.accountRefreshErrors[record.accountKey]];
-        for (NSUInteger index = 0; index < 4; index++) {
-            widths[index] = MAX(widths[index], ceil([columns[index] sizeWithAttributes:attributes].width));
-        }
+        CGFloat headingWidth = ceil([headings[index] sizeWithAttributes:attributes].width);
+        CGFloat sampleWidth = ceil([widthSamples[index] sizeWithAttributes:attributes].width);
+        widths[index] = MAX(headingWidth, sampleWidth);
     }
 
     NSMutableArray<NSNumber *> *tabStops = [NSMutableArray arrayWithCapacity:4];
