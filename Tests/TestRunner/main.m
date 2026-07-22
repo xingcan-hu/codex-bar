@@ -166,9 +166,32 @@ static void TestParsesUsageResponse(void) {
     ExpectNear(snapshot.primary.remainingPercent, 68.5, @"primary remaining");
     ExpectEqualObjects(snapshot.primary.windowMinutes, @300, @"primary window minutes");
     ExpectNear(snapshot.secondary.remainingPercent, 55.0, @"secondary remaining");
+    Expect(snapshot.fiveHourWindow == snapshot.primary, @"dual-window 5H mapping");
+    Expect(snapshot.weeklyWindow == snapshot.secondary, @"dual-window weekly mapping");
     ExpectNear(snapshot.remainingPercent.doubleValue, 55.0, @"limiting remaining");
     ExpectEqualObjects(snapshot.credits.balance, @"12.34", @"credit balance");
     ExpectEqualObjects(snapshot.fetchedAt, fetchedAt, @"fetched at");
+}
+
+static void TestSingleUsageWindowFallback(void) {
+    NSString *json = @"{"
+        "\"plan_type\":\"plus\","
+        "\"rate_limit\":{"
+            "\"primary_window\":{"
+                "\"used_percent\":2,"
+                "\"limit_window_seconds\":604800,"
+                "\"reset_at\":1785291284"
+            "},"
+            "\"secondary_window\":null"
+        "}"
+    "}";
+
+    NSError *error = nil;
+    UsageSnapshot *snapshot = [UsageSnapshot parseData:DataFromString(json) fetchedAt:NSDate.date error:&error];
+    Expect(snapshot != nil, [NSString stringWithFormat:@"single-window usage parse failed: %@", error]);
+    Expect(snapshot.fiveHourWindow == snapshot.primary, @"single-window 5H fallback");
+    Expect(snapshot.weeklyWindow == snapshot.primary, @"single-window weekly fallback");
+    ExpectNear(snapshot.weeklyWindow.remainingPercent, 98.0, @"single-window remaining");
 }
 
 static void TestRejectsResponseWithoutRateLimits(void) {
@@ -285,6 +308,46 @@ static void TestSwitchAccount(void) {
     Expect([files filteredArrayUsingPredicate:backupPredicate].count == 1, @"auth backup should be created");
 }
 
+static void TestSynchronizesUnregisteredActiveAuth(void) {
+    NSString *tmp = TempDirectory();
+    NSString *accounts = [tmp stringByAppendingPathComponent:@"accounts"];
+    [NSFileManager.defaultManager createDirectoryAtPath:accounts withIntermediateDirectories:YES attributes:nil error:nil];
+
+    NSString *keyA = @"user-a::acct-a";
+    NSString *keyB = @"user-b::acct-b";
+    NSString *authB = AuthJSON(@"b@example.com", @"user-b", @"acct-b", @"plus", @"access-b");
+    NSString *activeAuthPath = [tmp stringByAppendingPathComponent:@"auth.json"];
+    [authB writeToFile:activeAuthPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+    NSString *registryJSON = [NSString stringWithFormat:
+        @"{\"schema_version\":4,\"active_account_key\":\"%@\",\"previous_active_account_key\":null,\"active_account_activated_at_ms\":1,\"interval_seconds\":60,\"accounts\":["
+        "{\"account_key\":\"%@\",\"chatgpt_account_id\":\"acct-a\",\"chatgpt_user_id\":\"user-a\",\"email\":\"a@example.com\",\"alias\":\"\",\"account_name\":null,\"plan\":\"plus\",\"auth_mode\":\"chatgpt\",\"created_at\":1,\"last_used_at\":null,\"last_usage\":null,\"last_usage_at\":null,\"last_local_rollout\":null}"
+        "]}",
+        keyA,
+        keyA
+    ];
+    [registryJSON writeToFile:[accounts stringByAppendingPathComponent:@"registry.json"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+    NSError *error = nil;
+    CodexRegistry *registry = [CodexRegistry loadFromCodexHome:tmp error:&error];
+    CodexAuth *activeAuth = [CodexAuth loadFromPath:activeAuthPath error:&error];
+    Expect(registry != nil && activeAuth != nil, [NSString stringWithFormat:@"sync fixture load failed: %@", error]);
+    Expect([registry synchronizeWithActiveAuth:activeAuth error:&error], [NSString stringWithFormat:@"active auth sync failed: %@", error]);
+    ExpectEqualObjects(@(registry.accounts.count), @2, @"synced account count");
+    ExpectEqualObjects(registry.activeAccountKey, keyB, @"synced active account");
+    ExpectEqualObjects(registry.previousActiveAccountKey, keyA, @"synced previous account");
+
+    NSString *snapshotPath = [registry snapshotPathForAccountKey:keyB];
+    CodexAuth *snapshotAuth = [CodexAuth loadFromPath:snapshotPath error:&error];
+    Expect(snapshotAuth != nil, [NSString stringWithFormat:@"synced snapshot load failed: %@", error]);
+    ExpectEqualObjects(snapshotAuth.accountEmail, @"b@example.com", @"synced snapshot identity");
+
+    CodexRegistry *reloaded = [CodexRegistry loadFromCodexHome:tmp error:&error];
+    Expect(reloaded != nil, [NSString stringWithFormat:@"synced registry reload failed: %@", error]);
+    ExpectEqualObjects(@(reloaded.accounts.count), @2, @"persisted synced account count");
+    ExpectEqualObjects(reloaded.activeAccountKey, keyB, @"persisted synced active account");
+}
+
 int main(int argc, const char *argv[]) {
     (void)argc;
     (void)argv;
@@ -300,6 +363,8 @@ int main(int argc, const char *argv[]) {
         puts("PASS requires access token");
         TestParsesUsageResponse();
         puts("PASS parses usage response");
+        TestSingleUsageWindowFallback();
+        puts("PASS single usage window fallback");
         TestRejectsResponseWithoutRateLimits();
         puts("PASS rejects usage response without rate limits");
         TestRegistrySnapshotFileNames();
@@ -310,6 +375,8 @@ int main(int argc, const char *argv[]) {
         puts("PASS relative time string");
         TestSwitchAccount();
         puts("PASS switches account");
+        TestSynchronizesUnregisteredActiveAuth();
+        puts("PASS synchronizes unregistered active auth");
         puts("All tests passed.");
     }
     return 0;

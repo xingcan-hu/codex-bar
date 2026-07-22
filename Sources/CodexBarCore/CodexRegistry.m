@@ -386,6 +386,71 @@ NSString *CodexRelativeTimeString(NSDate *date, NSDate *now) {
     return auth;
 }
 
+- (BOOL)synchronizeWithActiveAuth:(CodexAuth *)auth error:(NSError **)error {
+    NSString *accountKey = StringValue(auth.accountKey);
+    NSString *chatGPTAccountID = StringValue(auth.chatGPTAccountID);
+    NSString *chatGPTUserID = StringValue(auth.chatGPTUserID);
+    NSString *email = StringValue(auth.accountEmail);
+    NSString *sourcePath = StringValue(auth.sourcePath);
+    if (!accountKey || !chatGPTAccountID || !chatGPTUserID || !email || !sourcePath) {
+        if (error) {
+            *error = CodexBarError(CodexBarErrorMissingRegistryAccount, @"Active auth is missing the identity fields needed to register the account");
+        }
+        return NO;
+    }
+
+    NSError *readError = nil;
+    NSData *authData = [NSData dataWithContentsOfFile:sourcePath options:0 error:&readError];
+    if (!authData) {
+        if (error) {
+            NSString *detail = readError.localizedDescription ?: @"unknown error";
+            *error = CodexBarError(CodexBarErrorReadFailed, [NSString stringWithFormat:@"Unable to read active auth at %@: %@", sourcePath, detail]);
+        }
+        return NO;
+    }
+
+    NSString *snapshotPath = [self snapshotPathForAccountKey:accountKey];
+    NSData *existingSnapshot = [NSData dataWithContentsOfFile:snapshotPath options:0 error:nil];
+    if (!existingSnapshot || ![existingSnapshot isEqualToData:authData]) {
+        if (!WritePrivateData(authData, snapshotPath, error)) {
+            return NO;
+        }
+    }
+
+    BOOL registryChanged = NO;
+    CodexAccountRecord *record = [self accountForKey:accountKey];
+    if (!record) {
+        record = [[CodexAccountRecord alloc] initWithAccountKey:accountKey
+                                               chatGPTAccountID:chatGPTAccountID
+                                                  chatGPTUserID:chatGPTUserID
+                                                          email:email
+                                                          alias:@""
+                                                    accountName:nil
+                                                           plan:auth.planType
+                                                       authMode:auth.authMode
+                                                      createdAt:NSDate.date
+                                                     lastUsedAt:NSDate.date
+                                                      lastUsage:nil
+                                                    lastUsageAt:nil
+                                               lastLocalRollout:nil];
+        [self.accounts addObject:record];
+        registryChanged = YES;
+    } else if (auth.planType.length > 0 && ![record.plan isEqualToString:auth.planType]) {
+        record.plan = auth.planType;
+        registryChanged = YES;
+    }
+
+    if (![self.activeAccountKey isEqualToString:accountKey]) {
+        self.previousActiveAccountKey = [self accountForKey:self.activeAccountKey] ? self.activeAccountKey : nil;
+        self.activeAccountKey = accountKey;
+        self.activeAccountActivatedAt = NSDate.date;
+        record.lastUsedAt = NSDate.date;
+        registryChanged = YES;
+    }
+
+    return !registryChanged || [self saveWithError:error];
+}
+
 - (BOOL)updateUsage:(UsageSnapshot *)usage forAccountKey:(NSString *)accountKey {
     CodexAccountRecord *record = [self accountForKey:accountKey];
     if (!record) {
